@@ -270,13 +270,12 @@ class Decoder(nn.Module):
             sampling_coor_fg = torch.matmul(fg_transform[None, ...], sampling_coor_fg[..., None])  # (K-1)xPx4x1
             sampling_coor_fg = sampling_coor_fg.squeeze(-1)[:, :, :3]  # (K-1)xPx3
         else:
-            sampling_coor_fg_temp = torch.matmul(fg_transform[None, ...], sampling_coor_fg[..., None])  # (K-1)xPx3x1
-            sampling_coor_fg_temp = sampling_coor_fg_temp.squeeze(-1)  # (K-1)xPx3
-            outsider_idx = torch.any(sampling_coor_fg_temp.abs() > self.locality_ratio, dim=-1)  # (K-1)xP
-            # relative position with fg slot position
-            if self.rel_pos:
+            if self.rel_pos: # relative position with fg slot position
                 sampling_coor_fg = sampling_coor_fg - fg_slot_position[:, None, :] # (K-1)xPx3
-                sampling_coor_fg = torch.matmul(fg_transform[None, ...], sampling_coor_fg[..., None]).squeeze(-1)  # (K-1)xPx3x1
+            sampling_coor_fg = torch.matmul(fg_transform[None, ...], sampling_coor_fg[..., None])  # (K-1)xPx3x1
+            sampling_coor_fg = sampling_coor_fg.squeeze(-1)  # (K-1)xPx3
+            outsider_idx = torch.any(sampling_coor_fg.abs() > self.locality_ratio, dim=-1)  # (K-1)xP
+            
 
         z_bg = z_slots[0:1, :]  # 1xC
         z_fg = z_slots[1:, :]  # (K-1)xC
