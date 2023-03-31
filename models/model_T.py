@@ -141,13 +141,6 @@ class EncoderPosEmbedding(nn.Module):
             nn.ReLU(),
             nn.Linear(hidden_dim, slot_dim)
         )
-
-        self.MLP_bg = nn.Sequential(
-            nn.LayerNorm(dim),
-            nn.Linear(dim, hidden_dim),
-            nn.ReLU(),
-            nn.Linear(hidden_dim, slot_dim)
-        )
         
     def apply_rel_position_scale(self, grid, position):
         """
@@ -184,14 +177,7 @@ class EncoderPosEmbedding(nn.Module):
         return k, v # (b, n, h*w, d)
 
     def forward_bg(self, x, h, w):
-        grid = build_grid(h, w, x.device) # (1, h, w, 2)
-        rel_grid = grid.unsqueeze(0).repeat(x.shape[0], 1, 1, 1, 1) # (b, 1, h, w, 2)
-        # rel_grid = rel_grid.flatten(-3, -2) # (b, 1, h*w, 2)
-        rel_grid = torch.cat([rel_grid, -rel_grid], dim=-1).flatten(-3, -2) # (b, 1, h*w, 4)
-        grid_embed = self.grid_embed(rel_grid) # (b, 1, h*w, d)
-        
         k_bg, v_bg = self.input_to_k_bg(x).unsqueeze(1), self.input_to_v_bg(x).unsqueeze(1) # (b, 1, h*w, d)
-        k_bg, v_bg = self.MLP_bg(k_bg + grid_embed), self.MLP_bg(v_bg + grid_embed)
 
         return k_bg, v_bg # (b, 1, h*w, d)
 
