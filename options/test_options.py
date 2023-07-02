@@ -17,5 +17,6 @@ class TestOptions(BaseOptions):
         parser.add_argument('--testset_name', type=str, default='testset')
         parser.add_argument('--stage', type=str, default='fine', help='stage of the model')
         parser.add_argument('--n_objects_eval', type=int,default=None, help='number of objects for manipulation')
+        parser.add_argument('--visual_only', action='store_true', help='only visualize the results, no quantitative evaluation')
         self.isTrain = False
         return parser
