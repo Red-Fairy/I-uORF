@@ -175,5 +175,39 @@ class MaskedMSELoss(nn.Module):
             mask_fg = 1 - mask
         loss = torch.sum(mask_fg * (x1 - x2)**2, dim=(1,2,3)) / torch.sum(mask_fg, dim=(1,2,3))
         return loss.mean()
+    
+class SlotFeatureSlotLoss(nn.Module):
+    '''
+    Calculate the slot-feature-slot cycle consistency loss
+    Input: 
+        Representation for each slot (K*C)
+        Representation for each spatial feature (N*C)
+    Step 1: Normalize the representations and calculate the similarity matrix (K*N)
+    Step 2: Softmax the similarity matrix to get A1(K*N) and A2(N*K)
+    Step 3: Calculate the probability from slot i to slot j, p(i->j) = \sum_n A1(i,n)*A2(n,j) (n in [1,N])
+    Step 4: Softmax the probability matrix P(i->j) = exp(p(i->j)) / \sum_n exp(p(i->n))
+    Step 5: Calculate the loss: - sum_i log(P(i->i))
+    '''
+    def __init__(self, nabla_1=0.1, nabla_2=1):
+        super(SlotFeatureSlotLoss, self).__init__()
+        self.nabla_1 = nabla_1
+        self.nabla_2 = nabla_2
+
+    def forward(self, slot, feature):
+        # Step 1
+        # slot = nn.functional.normalize(slot, dim=1)
+        # feature = nn.functional.normalize(feature, dim=1)
+        # Step 2
+        A1 = nn.functional.softmax(torch.matmul(slot, feature.transpose(0,1)) / self.nabla_1, dim=1) # K*N slot to feature
+        A2 = nn.functional.softmax(torch.matmul(feature, slot.transpose(0,1)) / self.nabla_1, dim=1) # N*K feature to slot
+        # Step 3
+        P = torch.matmul(A1, A2) # K*K
+        # Step 4
+        P = nn.functional.softmax(P / self.nabla_2, dim=1)
+        # Step 5
+        loss = -torch.log(torch.diagonal(P).clamp(min=1e-8)).mean()
+        return loss
+
+
 
         

@@ -19,7 +19,6 @@ from .utils import *
 from matplotlib import cm
 import matplotlib.pyplot as plt
 import numpy as np
-from segment_anything import sam_model_registry
 
 import torchvision
 
@@ -59,8 +58,8 @@ class uorfGeneralMaskModel(BaseModel):
 		parser.add_argument('--frustum_size_fine', type=int, default=128)
 		parser.add_argument('--attn_decay_steps', type=int, default=2e5)
 		parser.add_argument('--coarse_epoch', type=int, default=600)
-		parser.add_argument('--near_plane', type=float, default=6)
-		parser.add_argument('--far_plane', type=float, default=20)
+		parser.add_argument('--near_plane', type=float, default=8)
+		parser.add_argument('--far_plane', type=float, default=18)
 		parser.add_argument('--fixed_locality', action='store_true', help='enforce locality in world space instead of transformed view space')
 		parser.add_argument('--fg_in_world', action='store_true', help='foreground objects are in world space')
 		parser.add_argument('--dens_noise', type=float, default=1., help='Noise added to density may help in mitigating rank collapse')
@@ -100,6 +99,7 @@ class uorfGeneralMaskModel(BaseModel):
 		z_dim = opt.color_dim + opt.shape_dim
 
 		if opt.encoder_type == 'SAM':
+			from segment_anything import sam_model_registry
 			sam_model = sam_model_registry[opt.sam_type](checkpoint=opt.sam_path)
 			self.pretrained_encoder = SAMViT(sam_model).to(self.device).eval()
 			vit_dim = 256
@@ -172,9 +172,13 @@ class uorfGeneralMaskModel(BaseModel):
 			self.x_large = None
 			self.x_feats = input['img_feats'].to(self.device) # 1*H'*W'*C (H'=W'=64, C=1024)
 		self.cam2world = input['cam2world'].to(self.device)
-		self.masks = input['obj_idxs'].float().to(self.device) # K*1*H*W (no background mask)
-		self.num_slots = self.masks.shape[0]
-		self.bg_mask = input['bg_mask'].float().to(self.device) # N*1*H*W
+		if 'obj_idxs' in input:
+			self.masks = input['obj_idxs'].float().to(self.device) # K*1*H*W (no background mask)
+			self.num_slots = self.masks.shape[0]
+			self.bg_mask = input['bg_mask'].float().to(self.device) # N*1*H*W
+		else:
+			self.masks = None
+			self.num_slots = 1
 		if not self.opt.fixed_locality:
 			self.cam2world_azi = input['azi_rot'].to(self.device)
 
@@ -207,7 +211,7 @@ class uorfGeneralMaskModel(BaseModel):
 
 		feat_shape = feature_map_shape.permute([0, 2, 3, 1]).contiguous()  # BxHxWxC
 		feat_color = feature_map_color.permute([0, 2, 3, 1]).contiguous()  # BxHxWxC
-		self.masks = F.interpolate(self.masks, size=feat_shape.shape[1:3], mode='nearest')  # Kx1xHxW
+		self.masks = F.interpolate(self.masks, size=feat_shape.shape[1:3], mode='nearest') if self.masks is not None else None  # KxHxW
 	
 		# Slot Attention
 		use_mask = epoch < self.opt.mask_in
@@ -226,19 +230,6 @@ class uorfGeneralMaskModel(BaseModel):
 		if self.opt.stage == 'coarse':
 			frus_nss_coor, z_vals, ray_dir = self.projection.construct_sampling_coor(cam2world)
 			# (NxDxHxW)x3, (NxHxW)xD, (NxHxW)x3
-			frus_nss_coor_debug = frus_nss_coor.reshape(N, -1, 3).cpu().numpy()
-			fig = plt.figure(figsize=(20, 40))
-			# create a subplot for each camera
-			colors = cm.rainbow(np.linspace(0, 1, N))
-			cam2world_debug = cam2world.cpu().numpy()
-			for i in range(N):
-				ax = plt.subplot(2, 4, i+1, projection='3d')
-				# visualize the frustum
-				ax.scatter(frus_nss_coor_debug[i,:,0], frus_nss_coor_debug[i,:,1], frus_nss_coor_debug[i,:,2], c=colors[i], marker='o', s=1)
-				# visualize the camera origin
-				ax.scatter(cam2world_debug[i,0,3], cam2world_debug[i,1,3], cam2world_debug[i,2,3], c=colors[i], marker='o', s=10)
-			fig.savefig('frus_nss_coor.png')
-			exit()
 			x = F.interpolate(self.x, size=self.opt.supervision_size, mode='bilinear', align_corners=False)
 			self.z_vals, self.ray_dir = z_vals, ray_dir
 		else:

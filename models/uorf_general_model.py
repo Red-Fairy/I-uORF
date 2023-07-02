@@ -15,7 +15,7 @@ from torchvision.transforms import Normalize
 from .model_general import SAMViT, dualRouteEncoderSeparate, dualRouteEncoderSDSeparate, Encoder
 from .model_general import SlotAttention, Decoder
 from .utils import *
-from segment_anything import sam_model_registry
+
 
 import torchvision
 
@@ -54,8 +54,8 @@ class uorfGeneralModel(BaseModel):
 		parser.add_argument('--frustum_size', type=int, default=64)
 		parser.add_argument('--frustum_size_fine', type=int, default=128)
 		parser.add_argument('--attn_decay_steps', type=int, default=2e5)
-		parser.add_argument('--freezeInit_ratio', type=float, default=0.2)
-		parser.add_argument('--freezeInit_steps', type=int, default=0)
+		parser.add_argument('--freezeInit_ratio', type=float, default=1)
+		parser.add_argument('--freezeInit_steps', type=int, default=100000)
 		parser.add_argument('--coarse_epoch', type=int, default=600)
 		parser.add_argument('--near_plane', type=float, default=8)
 		parser.add_argument('--far_plane', type=float, default=18)
@@ -63,7 +63,9 @@ class uorfGeneralModel(BaseModel):
 		parser.add_argument('--fg_in_world', action='store_true', help='foreground objects are in world space')
 		parser.add_argument('--dens_noise', type=float, default=1., help='Noise added to density may help in mitigating rank collapse')
 		parser.add_argument('--invariant_in', type=int, default=0, help='when to start translation invariant decoding')
-		
+		parser.add_argument('--sfs_loss', action='store_true', help='use the Slot-Feature-Slot loss')
+		parser.add_argument('--weight_sfs', type=float, default=0.1, help='weight of the Slot-Feature-Slot loss')
+
 		parser.set_defaults(batch_size=1, lr=3e-4, niter_decay=0,
 							dataset_mode='multiscenes', niter=1200, custom_lr=True, lr_policy='warmup')
 
@@ -80,7 +82,7 @@ class uorfGeneralModel(BaseModel):
 		- define loss function, visualization images, model names, and optimizers
 		"""
 		BaseModel.__init__(self, opt)  # call the initialization method of BaseModel
-		self.loss_names = ['recon', 'perc']
+		self.loss_names = ['recon', 'perc', 'sfs']
 		self.set_visual_names()
 		self.model_names = ['Encoder', 'SlotAttention', 'Decoder']
 		self.perceptual_net = get_perceptual_net().to(self.device)
@@ -97,6 +99,7 @@ class uorfGeneralModel(BaseModel):
 		self.num_slots = opt.num_slots
 
 		if opt.encoder_type == 'SAM':
+			from segment_anything import sam_model_registry
 			sam_model = sam_model_registry[opt.sam_type](checkpoint=opt.sam_path)
 			self.pretrained_encoder = SAMViT(sam_model).to(self.device).eval()
 			vit_dim = 256
@@ -119,13 +122,15 @@ class uorfGeneralModel(BaseModel):
 			assert False
 
 		self.netSlotAttention = networks.init_net(
-				SlotAttention(num_slots=opt.num_slots, in_dim=opt.shape_dim, slot_dim=opt.shape_dim, color_dim=opt.color_dim, iters=opt.attn_iter), gpu_ids=self.gpu_ids, init_type='normal')
+				SlotAttention(num_slots=opt.num_slots, in_dim=opt.shape_dim, slot_dim=opt.shape_dim, color_dim=opt.color_dim, iters=opt.attn_iter,
+		  						learnable_pos=not opt.no_learnable_pos), gpu_ids=self.gpu_ids, init_type='normal')
 		self.netDecoder = networks.init_net(Decoder(n_freq=opt.n_freq, input_dim=6*opt.n_freq+3+z_dim, z_dim=z_dim, n_layers=opt.n_layer,
 													locality_ratio=opt.world_obj_scale/opt.nss_scale, fixed_locality=opt.fixed_locality, 
 													project=opt.project, rel_pos=opt.relative_position, fg_in_world=opt.fg_in_world
 													), gpu_ids=self.gpu_ids, init_type='xavier')
 
 		self.L2_loss = nn.MSELoss()
+		self.sfs_loss = SlotFeatureSlotLoss()
 
 	def set_visual_names(self):
 		n = self.opt.n_img_each_scene
@@ -197,6 +202,7 @@ class uorfGeneralModel(BaseModel):
 		dens_noise = self.opt.dens_noise if (epoch <= self.opt.percept_in and self.opt.fixed_locality) else 0
 		self.loss_recon = 0
 		self.loss_perc = 0
+		self.loss_sfs = 0
 		dev = self.x[0:1].device
 		cam2world_viewer = self.cam2world[0]
 		nss2cam0 = self.cam2world[0:1].inverse() if self.opt.fixed_locality else self.cam2world_azi[0:1].inverse()
@@ -275,6 +281,11 @@ class uorfGeneralModel(BaseModel):
 		rendered_feat, x_feat = self.perceptual_net(rendered_norm), self.perceptual_net(x_norm)
 		self.loss_perc = self.weight_percept * self.L2_loss(rendered_feat, x_feat)
 
+		if self.opt.sfs_loss:
+			# shape representations of foreground slots: z_slots[1:, :self.opt.shape_dim] # K*C
+			# representations of spatial features: feat_shape.flatten(1, 2).squeeze(0) # N*C
+			self.loss_sfs = self.opt.weight_sfs * self.sfs_loss(z_slots[1:, :self.opt.shape_dim], feat_shape.flatten(1, 2).squeeze(0))
+
 		with torch.no_grad():
 			attn = attn.detach().cpu()  # KxN
 			H_, W_ = feature_map_shape.shape[2], feature_map_shape.shape[3]
@@ -323,9 +334,9 @@ class uorfGeneralModel(BaseModel):
 
 	def backward(self):
 		"""Calculate losses, gradients, and update network weights; called in every training iteration"""
-		loss = self.loss_recon + self.loss_perc
+		loss = self.loss_recon + self.loss_perc + self.loss_sfs
 		loss.backward()
-		self.loss_perc = self.loss_perc / self.weight_percept if self.weight_percept > 0 else self.loss_perc
+		# self.loss_perc = self.loss_perc / self.weight_percept if self.weight_percept > 0 else self.loss_perc
 
 	def optimize_parameters(self, ret_grad=False, epoch=0):
 		"""Update network weights; it will be called in every training iteration."""
