@@ -10,6 +10,6 @@ CUDA_VISIBLE_DEVICES=3 python test-video.py --dataroot $DATAROOT --n_scenes 1 --
     --encoder_size 896 --encoder_type 'DINO' \
     --exp_id '/viscam/redfairy/I-uORF/checkpoints/real_chairs/0628/1obj-scratch-1296-72-24' \
     --shape_dim 72 --color_dim 24 --bottom \
-    --attn_iter 4 --no_loss --visual_only --testset_name test_video-swapToOrigin \
+    --attn_iter 4 --no_loss --visual_only --visual_idx 0 --testset_name test_video-swapToOrigin/idx0 \
 # done
 echo "Done"

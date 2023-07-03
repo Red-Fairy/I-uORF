@@ -23,6 +23,7 @@ def write_location(f, location, i, description=''):
     location = location.cpu().numpy()
     for i in range(location.shape[0]):
         f.write(f"Slot {i}:, ({location[i][0]:.4f}, {location[i][1]:.4f})\n")
+        print(f"Slot {i}:, ({location[i][0]:.4f}, {location[i][1]:.4f})")
     f.flush()
 
 def resize_masks(masks, image_size):

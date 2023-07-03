@@ -54,6 +54,12 @@ for id, data in enumerate(dataset):
             offset1 = 0.4
             # offset2 = offset1
             num_slots = opt.num_slots if opt.n_objects_eval is None else opt.n_objects_eval
+            inferred_nss_position = model.fg_slot_nss_position[0:1].cpu()
+            inferred_image_position = model.fg_slot_image_position[0:1].cpu()
+            # save the inferred position
+            with open(os.path.join(web_dir, 'inferred_position.txt'), 'w') as f:
+                write_location(f, inferred_image_position, 0, 'image')
+                write_location(f, inferred_nss_position, 0, 'nss')
             fg_slot_position = torch.zeros((num_slots-1, 2))
             fg_slot_position[0] = torch.tensor([0 ,0])
             model.forward_position(fg_slot_nss_position=fg_slot_position)

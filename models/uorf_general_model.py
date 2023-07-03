@@ -65,6 +65,9 @@ class uorfGeneralModel(BaseModel):
 		parser.add_argument('--invariant_in', type=int, default=0, help='when to start translation invariant decoding')
 		parser.add_argument('--sfs_loss', action='store_true', help='use the Slot-Feature-Slot loss')
 		parser.add_argument('--weight_sfs', type=float, default=0.1, help='weight of the Slot-Feature-Slot loss')
+		parser.add_argument('--position_loss', action='store_true', help='use the position loss')
+		parser.add_argument('--position_in', type=int, default=100, help='when to start the position loss')
+		parser.add_argument('--weight_position', type=float, default=0.05, help='weight of the position loss')
 
 		parser.set_defaults(batch_size=1, lr=3e-4, niter_decay=0,
 							dataset_mode='multiscenes', niter=1200, custom_lr=True, lr_policy='warmup')
@@ -82,7 +85,7 @@ class uorfGeneralModel(BaseModel):
 		- define loss function, visualization images, model names, and optimizers
 		"""
 		BaseModel.__init__(self, opt)  # call the initialization method of BaseModel
-		self.loss_names = ['recon', 'perc', 'sfs']
+		self.loss_names = ['recon', 'perc', 'sfs', 'pos']
 		self.set_visual_names()
 		self.model_names = ['Encoder', 'SlotAttention', 'Decoder']
 		self.perceptual_net = get_perceptual_net().to(self.device)
@@ -196,31 +199,26 @@ class uorfGeneralModel(BaseModel):
 		if not self.opt.fixed_locality:
 			self.cam2world_azi = input['azi_rot'].to(self.device)
 
-	def forward(self, epoch=0):
-		"""Run forward pass. This will be called by both functions <optimize_parameters> and <test>."""
-		self.weight_percept = self.opt.weight_percept if epoch >= self.opt.percept_in else 0
-		dens_noise = self.opt.dens_noise if (epoch <= self.opt.percept_in and self.opt.fixed_locality) else 0
-		self.loss_recon = 0
-		self.loss_perc = 0
-		self.loss_sfs = 0
+	def encode(self, idx=0):
+		"""Encode the input image into a feature map.
+		Parameters:
+			idx: idx of the image to be encoded (typically 0, if position loss is used, we may use 1)
+		Returns:
+			feat_shape, feat_color
+		"""
+		
 		dev = self.x[0:1].device
-		cam2world_viewer = self.cam2world[0]
-		nss2cam0 = self.cam2world[0:1].inverse() if self.opt.fixed_locality else self.cam2world_azi[0:1].inverse()
-		if self.opt.fixed_locality: # divide the translation part by self.opt.nss_scale
-			nss2cam0 = torch.cat([nss2cam0[:, :3, :3], nss2cam0[:, :3, 3:4]/self.opt.nss_scale], dim=2)
-
-		# Encoding images
 		if not self.opt.encoder_type == 'CNN':
 			if self.opt.encoder_type == 'SAM':
 				with torch.no_grad():
-					feature_map = self.pretrained_encoder(self.x_large[0:1].to(dev))  # BxC'xHxW, C': shape_dim (z_dim)
+					feature_map = self.pretrained_encoder(self.x_large[idx:idx+1].to(dev))  # BxC'xHxW, C': shape_dim (z_dim)
 			elif self.opt.encoder_type == 'DINO':
 				with torch.no_grad():
 					feat_size = 64
-					feature_map = self.pretrained_encoder.forward_features(self.x_large[0:1].to(dev))['x_norm_patchtokens'].reshape(1, feat_size, feat_size, -1).permute([0, 3, 1, 2]).contiguous() # 1xCxHxW
+					feature_map = self.pretrained_encoder.forward_features(self.x_large[idx:idx+1].to(dev))['x_norm_patchtokens'].reshape(1, feat_size, feat_size, -1).permute([0, 3, 1, 2]).contiguous() # 1xCxHxW
 			elif self.opt.encoder_type == 'SD':
 				with torch.no_grad():
-					feature_map = self.pretrained_encoder({'img': self.x_large[0:1], 'text':''})
+					feature_map = self.pretrained_encoder({'img': self.x_large[idx:idx+1], 'text':''})
 			# Encoder receives feature map from SAM/DINO/StableDiffusion and resized images as inputs
 			feature_map_shape, feature_map_color = self.netEncoder(feature_map,
 					F.interpolate(self.x[0:1], size=self.opt.input_size, mode='bilinear', align_corners=False))  # Bxshape_dimxHxW, Bxcolor_dimxHxW
@@ -228,9 +226,28 @@ class uorfGeneralModel(BaseModel):
 			feat_shape = feature_map_shape.permute([0, 2, 3, 1]).contiguous()  # BxHxWxC
 			feat_color = feature_map_color.permute([0, 2, 3, 1]).contiguous()  # BxHxWxC
 		else:
-			feature_map_shape = self.netEncoder(F.interpolate(self.x[0:1], size=self.opt.input_size, mode='bilinear', align_corners=False))  # BxCxHxW
+			feature_map_shape = self.netEncoder(F.interpolate(self.x[idx:idx+1], size=self.opt.input_size, mode='bilinear', align_corners=False))  # BxCxHxW
 			feat_shape = feature_map_shape.permute([0, 2, 3, 1]).contiguous()
 			feat_color = None
+
+		return feat_shape, feat_color
+
+	def forward(self, epoch=0):
+		"""Run forward pass. This will be called by both functions <optimize_parameters> and <test>."""
+		self.weight_percept = self.opt.weight_percept if epoch >= self.opt.percept_in else 0
+		dens_noise = self.opt.dens_noise if (epoch <= self.opt.percept_in and self.opt.fixed_locality) else 0
+		self.loss_recon = 0
+		self.loss_perc = 0
+		self.loss_sfs = 0
+		self.loss_pos = 0
+		dev = self.x[0:1].device
+		cam2world_viewer = self.cam2world[0]
+		nss2cam0 = self.cam2world[0:1].inverse() if self.opt.fixed_locality else self.cam2world_azi[0:1].inverse()
+		if self.opt.fixed_locality: # divide the translation part by self.opt.nss_scale
+			nss2cam0 = torch.cat([nss2cam0[:, :3, :3], nss2cam0[:, :3, 3:4]/self.opt.nss_scale], dim=2)
+
+		# Encoding images
+		feat_shape, feat_color = self.encode(0)
 	
 		# Slot Attention
 		z_slots, attn, fg_slot_position = self.netSlotAttention(feat_shape, feat_color=feat_color)  # 1xKxC, 1xKx2, 1xKxN
@@ -286,9 +303,19 @@ class uorfGeneralModel(BaseModel):
 			# representations of spatial features: feat_shape.flatten(1, 2).squeeze(0) # N*C
 			self.loss_sfs = self.opt.weight_sfs * self.sfs_loss(z_slots[1:, :self.opt.shape_dim], feat_shape.flatten(1, 2).squeeze(0))
 
+		if self.opt.position_loss and epoch >= self.opt.position_in:
+			assert self.opt.num_slots == 2 # only support one foreground object
+			# infer the position from the second view
+			feat_shape_, _ = self.encode(1)
+			_, _, fg_slot_position_ = self.netSlotAttention(feat=feat_shape_, feat_color=None)  # 1xKx2
+			fg_slot_position_ = fg_slot_position_.squeeze(0)  # Kx2
+			# calculate the position loss (L2 loss between the two inferred positions)
+			self.loss_pos = self.opt.weight_position * self.L2_loss(fg_slot_position, fg_slot_position_)
+			# print('position loss: {}'.format(self.loss_position.item()))
+
 		with torch.no_grad():
 			attn = attn.detach().cpu()  # KxN
-			H_, W_ = feature_map_shape.shape[2], feature_map_shape.shape[3]
+			H_, W_ = feat_shape.shape[1:3]
 			attn = attn.view(self.opt.num_slots, 1, H_, W_)
 			if H_ != H:
 				attn = F.interpolate(attn, size=[H, W], mode='bilinear')
@@ -334,7 +361,7 @@ class uorfGeneralModel(BaseModel):
 
 	def backward(self):
 		"""Calculate losses, gradients, and update network weights; called in every training iteration"""
-		loss = self.loss_recon + self.loss_perc + self.loss_sfs
+		loss = self.loss_recon + self.loss_perc + self.loss_sfs + self.loss_pos
 		loss.backward()
 		# self.loss_perc = self.loss_perc / self.weight_percept if self.weight_percept > 0 else self.loss_perc
 
