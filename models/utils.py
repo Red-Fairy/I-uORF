@@ -207,6 +207,28 @@ class SlotFeatureSlotLoss(nn.Module):
         # Step 5
         loss = -torch.log(torch.diagonal(P).clamp(min=1e-8)).mean()
         return loss
+    
+class PositionSetLoss(nn.Module):
+    '''
+    Calculate the position set loss
+    Input: 
+        two sets of 2D position (N*2, N*2)
+    For each position in set 1, find the nearest position in set 2
+    and calculate the distance between them
+    '''
+    def __init__(self):
+        super(PositionSetLoss, self).__init__()
+
+    def forward(self, pos1, pos2):
+        '''
+        pos1, pos2: N*2
+        '''
+        pos1 = pos1.unsqueeze(1)
+        pos2 = pos2.unsqueeze(0)
+        dist = torch.sqrt(torch.sum((pos1 - pos2)**2, dim=2)) # N*N
+        dist = torch.min(dist, dim=1)[0]
+        return dist.mean()
+    
 
 
 

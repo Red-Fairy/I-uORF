@@ -37,8 +37,8 @@ CUDA_VISIBLE_DEVICES=3 python train_without_gan.py --dataroot $DATAROOT --n_scen
     --coarse_epoch 500 --niter 500 --percept_in 25 --no_locality_epoch 50 --seed 2023 \
     --position_loss \
     --continue_train --epoch 100 --epoch_count 101 \
-    --exp_id '0628/1obj-scratch-posLoss-72-24' \
-    --dummy_info 'DINO from scratch 1 obj with BG, no adding bias to position' \
+    --exp_id '0628/1obj-scratch-posLoss-nss' \
+    --dummy_info 'DINO from scratch 1 obj with BG, position loss in the nss space, weight position = 0.1' \
     
 
 # can try the following to list out which GPU you have access to

@@ -22,22 +22,24 @@ echo "SLURMTMPDIR="$SLURMTMPDIR
 echo "working directory = "$SLURM_SUBMIT_DIR
 
 # sample process (list hostnames of the nodes you've requested)
-DATAROOT=${1:-'/viscam/redfairy/image_generation/datasets/ABO-chairs-1obj-r2'}
+DATAROOT=${1:-'/viscam/redfairy/image_generation/datasets/ABO-chairs-4obj'}
 PORT=${2:-12783}
 python -m visdom.server -p $PORT &>/dev/null &
-CUDA_VISIBLE_DEVICES=0 python train_without_gan.py --dataroot $DATAROOT --n_scenes 1296 --n_img_each_scene 2 \
+CUDA_VISIBLE_DEVICES=0 python train_without_gan.py --dataroot $DATAROOT --n_scenes 5000 --n_img_each_scene 3 \
     --checkpoints_dir 'checkpoints' --name 'real_chairs' \
     --display_port $PORT --display_ncols 4 --print_freq 50 --display_freq 50 --save_epoch_freq 20 \
-    --load_size 128 --n_samp 64 --input_size 128 --supervision_size 128 --frustum_size 128 \
+    --load_size 128 --n_samp 64 --input_size 128 --supervision_size 64 --frustum_size 64 \
     --model 'uorf_general' \
     --attn_decay_steps 200000 \
     --bottom \
-    --encoder_size 896 --encoder_type 'DINO' --no_learnable_pos \
-    --num_slots 2 --attn_iter 4 --shape_dim 72 --color_dim 24 \
-    --coarse_epoch 500 --niter 500 --percept_in 25 --no_locality_epoch 50 --seed 2023 \
-    --exp_id '0628/1obj-scratch-noPos-72-24' \
-    --dummy_info 'DINO from scratch 1 obj with BG, no adding bias to position' \
-    
+    --encoder_size 896 --encoder_type 'DINO' \
+    --num_slots 5 --attn_iter 4 --shape_dim 72 --color_dim 24 --freezeInit_steps 100000 \
+    --coarse_epoch 100 --niter 200 --percept_in 30 --no_locality_epoch 50 --seed 2023 \
+    --load_pretrain --load_pretrain_path '/viscam/redfairy/I-uORF/checkpoints/real_chairs/0628/1obj-scratch-posLoss-nss' \
+    --load_encoder 'load_train' --load_slotattention 'load_freeze' --load_decoder 'load_freeze' \
+    --exp_id '0628/4obj-load-posLoss' \
+    --dummy_info 'DINO, load from 1 obj with learnable position, ~200epoch, freezeInit 100000 (20epoch), percept 25 epoch, no-locality 50 epoch' \
+
 
 # can try the following to list out which GPU you have access to
 #srun /usr/local/cuda/samples/1_Utilities/deviceQuery/deviceQuery
